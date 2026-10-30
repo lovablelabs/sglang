@@ -31,7 +31,7 @@ from sglang.srt.models.deepseek_common.utils import (
     _is_npu,
     _use_aiter_gfx95,
 )
-from sglang.srt.runtime_context import get_exec, get_parallel, get_schedule
+from sglang.srt.runtime_context import get_exec, get_flags, get_parallel, get_schedule
 from sglang.srt.utils import BumpAllocator, next_power_of_2
 
 if TYPE_CHECKING:
@@ -172,12 +172,40 @@ def forward_dsa_indexer_for_mha(
 
 class DeepseekMHAForwardMixin:
     def init_mha_forward(self: DeepseekV2AttentionMLA):
+        self._bf16_k_pack_target = not get_flags().moe.in_speculative_scope
         self.disable_chunked_prefix_cache = get_schedule().disable_chunked_prefix_cache
 
         # TODO: Design a finer way to determine the threshold
         self.chunked_prefix_cache_threshold = (
             envs.SGLANG_CHUNKED_PREFIX_CACHE_THRESHOLD.get()
         )
+
+    def _try_fused_bf16_k_pack(
+        self: DeepseekV2AttentionMLA,
+        k: torch.Tensor,
+        k_nope: torch.Tensor,
+        k_pe: torch.Tensor | None,
+        forward_batch: ForwardBatch,
+    ) -> bool:
+        if (
+            not _is_cuda
+            or not self._bf16_k_pack_target
+            or forward_batch.forward_mode.name != "EXTEND"
+            or k.shape[0] < 1024
+            or k_pe is None
+            or k.dtype != torch.bfloat16
+            or k_nope.dtype != torch.bfloat16
+            or k_pe.dtype != torch.bfloat16
+            or k.shape[1:] != (12, 192)
+            or k_nope.shape != (k.shape[0], 12, 128)
+            or k_pe.shape != (k.shape[0], 1, 64)
+            or k.stride(-1) != 1
+            or k_nope.stride(-1) != 1
+            or k_pe.stride(-1) != 1
+        ):
+            return False
+        concat_and_cast_mha_k_triton(k, k_nope, k_pe)
+        return True
 
     def forward_normal_prepare(
         self: DeepseekV2AttentionMLA,
@@ -560,8 +588,9 @@ class DeepseekMHAForwardMixin:
                         dtype=v.dtype,
                         device=v.device,
                     )
-                    k[..., : self.qk_nope_head_dim] = k_nope
-                    k[..., self.qk_nope_head_dim :] = k_pe
+                    if not self._try_fused_bf16_k_pack(k, k_nope, k_pe, forward_batch):
+                        k[..., : self.qk_nope_head_dim] = k_nope
+                        k[..., self.qk_nope_head_dim :] = k_pe
                 del kv_a_normed, k_pe, kv, k_nope, v_dense
 
             output, lse = self.attn_mha(
@@ -746,6 +775,7 @@ class DeepseekMHAForwardMixin:
             concat_and_cast_mha_k_triton(k, k_nope, k_pe)
         else:
             k = k_nope.new_empty(*k_shape)
-            k[..., : self.qk_nope_head_dim] = k_nope
-            k[..., self.qk_nope_head_dim :] = k_pe
+            if not self._try_fused_bf16_k_pack(k, k_nope, k_pe, forward_batch):
+                k[..., : self.qk_nope_head_dim] = k_nope
+                k[..., self.qk_nope_head_dim :] = k_pe
         return k
