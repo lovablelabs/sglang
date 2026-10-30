@@ -1,0 +1,43 @@
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -796,10 +796,12 @@
+
+     let mut slice_start = 0;
+     let mut current_slice_len = 0;
+-    let mut current_slice_is_space = text.chars().next().is_some_and(char::is_whitespace);
++    let is_python_whitespace =
++        |value: char| value.is_whitespace() || matches!(value, '\u{001c}'..='\u{001f}');
++    let mut current_slice_is_space = text.chars().next().is_some_and(is_python_whitespace);
+
+     for (idx, char) in text.char_indices() {
+-        let is_now_space = char.is_whitespace();
++        let is_now_space = is_python_whitespace(char);
+         if current_slice_is_space ^ is_now_space {
+             current_slice_len = 1;
+             current_slice_is_space = is_now_space;
+@@ -2568,6 +2570,25 @@
+ mod affinity_tests {
+     use super::*;
+
++    #[test]
++    fn tiktoken_safe_preserves_ids_around_python_control_whitespace() {
++        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
++            .join("vendored_tokenizers/kimi-k3/tokenizer.json");
++        let tokenizer = Tokenizer::from_file(&path).unwrap();
++        for separator in '\u{001c}'..='\u{001f}' {
++            let text = format!("{}{separator}{}", "a".repeat(24_998), "bc".repeat(1_000));
++            for allow_special in [false, true] {
++                let expected = tokenizer
++                    .encode_segments([(text.as_str(), allow_special)], false)
++                    .unwrap();
++                let actual = tokenizer
++                    .encode_segments_tiktoken_safe([(text.as_str(), allow_special)], false)
++                    .unwrap();
++                assert_eq!(actual, expected, "separator {separator:?}");
++            }
++        }
++    }
++
+     fn kimi_fixture() -> (Value, String) {
+         let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+         let json = serde_json::from_str(
