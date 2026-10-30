@@ -512,7 +512,11 @@ class BaseMultimodalProcessor(ABC):
             self.mm_processor_executor.shutdown()
 
     def _create_cpu_executor(self) -> concurrent.futures.ProcessPoolExecutor:
-        start_method = "spawn" if self.mm_feature_transport == "cuda_vmm" else "fork"
+        use_spawn = (
+            self.mm_feature_transport == "cuda_vmm"
+            or get_serving().tokenizer_backend == "baseten"
+        )
+        start_method = "spawn" if use_spawn else "fork"
         return concurrent.futures.ProcessPoolExecutor(
             mp_context=mp.get_context(start_method),
             max_workers=int(os.environ.get("SGLANG_CPU_WORKERS", os.cpu_count())),

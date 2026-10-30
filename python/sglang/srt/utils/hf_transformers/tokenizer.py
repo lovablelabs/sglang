@@ -477,6 +477,13 @@ def get_tokenizer(
     **kwargs,
 ) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
     """Gets a tokenizer for the given model name via Huggingface."""
+    if tokenizer_backend == "baseten" and (
+        tokenizer_name.endswith(".json") or check_gguf_file(tokenizer_name)
+    ):
+        raise ValueError(
+            "The baseten backend requires an original Kimi K3 checkpoint directory"
+        )
+
     # Tiktoken format has its own backend — no fastokens patching needed.
     if tokenizer_name.endswith(".json"):
         from sglang.srt.tokenizer.tiktoken_tokenizer import TiktokenTokenizer
@@ -550,7 +557,14 @@ def get_tokenizer(
                     tokenizer_name, *args, **common_kwargs
                 )
 
-        return _apply_post_load_fixes(tokenizer, tokenizer_name, tokenizer_revision)
+        tokenizer = _apply_post_load_fixes(
+            tokenizer, tokenizer_name, tokenizer_revision
+        )
+        if tokenizer_backend == "baseten":
+            from sglang.srt.tokenizer.baseten_kimi import enable_baseten_kimi
+
+            tokenizer = enable_baseten_kimi(tokenizer)
+        return tokenizer
     except Exception as e:
         if tokenizer_backend == "fastokens":
             raise RuntimeError(

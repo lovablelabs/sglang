@@ -43,8 +43,9 @@ class Serving(msgspec.Struct):
         Arg(
             help="Tokenizer backend. 'huggingface' uses the default HuggingFace "
             "tokenizers library, and 'fastokens' uses the fastokens library "
-            "for faster tokenization. Requires the fastokens package to be installed.",
-            choices=["huggingface", "fastokens"],
+            "for faster tokenization. 'baseten' accelerates the original Kimi K3 "
+            "tokenizer and requires the pinned Baseten build.",
+            choices=["huggingface", "fastokens", "baseten"],
         ),
     ] = "huggingface"
     tokenizer_worker_num: A[

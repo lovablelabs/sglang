@@ -255,6 +255,8 @@ def get_processor(
             **kwargs,
         )
     if config.model_type == "deepseek_v41" and config.vision_n_layers > 0:
+        if tokenizer_backend == "baseten":
+            raise ValueError("The baseten backend supports Kimi K3 only")
         return get_tokenizer(
             tokenizer_name, trust_remote_code=trust_remote_code, revision=revision
         )
@@ -268,6 +270,16 @@ def get_processor(
     # Checkpoints with language_model_only=True are text-only despite their
     # multimodal-family config; route to tokenizer instead of the mm processor.
     if getattr(config, "language_model_only", False):
+        if tokenizer_backend == "baseten":
+            return get_tokenizer(
+                tokenizer_name,
+                *args,
+                tokenizer_mode=tokenizer_mode,
+                trust_remote_code=trust_remote_code,
+                tokenizer_revision=revision,
+                tokenizer_backend=tokenizer_backend,
+                **kwargs,
+            )
         return AutoTokenizer.from_pretrained(
             tokenizer_name,
             *args,
@@ -392,4 +404,8 @@ def get_processor(
     _fix_special_tokens_pattern(tokenizer)
     _fix_added_tokens_encoding(tokenizer)
     attach_additional_stop_token_ids(tokenizer)
+    if tokenizer_backend == "baseten":
+        from sglang.srt.tokenizer.baseten_kimi import enable_baseten_kimi
+
+        enable_baseten_kimi(tokenizer)
     return processor
